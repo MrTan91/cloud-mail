@@ -325,25 +325,71 @@ jobs:
       - name: ♻️ 初始化数据库 / Initialize database
         run: |
           echo "🛠️ Starting database initialization..."
-          sleep 15
-          
-          WORKER_URL="${CUSTOM_DOMAIN:+https://$CUSTOM_DOMAIN}"
-          WORKER_URL="${WORKER_URL:-${{ steps.deploy.outputs.worker_url }}}"
-          
-          if [ -z "$WORKER_URL" ]; then
-            echo "❌ Preview URL not available. Please set CUSTOM_DOMAIN."
-            exit 1
-          fi
-          
-          HTTP_CODE=$(curl -sL -w "%{http_code}" -o response.txt "$WORKER_URL/api/init/${JWT_SECRET}")
-          RESPONSE_BODY=$(cat response.txt)
 
-          if [ "$RESPONSE_BODY" = "success" ]; then
-            echo "✅ Setup completed."
-          else
-            echo "❌ Failed. HTTP: $HTTP_CODE, Response: $RESPONSE_BODY"
+          PRIMARY_URL="${CUSTOM_DOMAIN:+https://$CUSTOM_DOMAIN}"
+          PRIMARY_URL="${PRIMARY_URL:-${{ steps.deploy.outputs.worker_url }}}"
+          FALLBACK_URL="${{ steps.deploy.outputs.worker_url }}"
+
+          if [ -z "$PRIMARY_URL" ]; then
+            echo "❌ Worker URL not available. Please set CUSTOM_DOMAIN or ensure deploy outputs worker_url."
             exit 1
           fi
+
+          echo "Primary init URL: $PRIMARY_URL"
+          if [ -n "$FALLBACK_URL" ] && [ "$FALLBACK_URL" != "$PRIMARY_URL" ]; then
+            echo "Fallback init URL: $FALLBACK_URL"
+          fi
+
+          try_init() {
+            local base_url="$1"
+            local attempt=1
+            local max_attempts=12
+
+            while [ $attempt -le $max_attempts ]; do
+              echo "Attempt $attempt/$max_attempts -> ${base_url}/api/init/***"
+              set +e
+              HTTP_CODE=$(curl -sL -w "%{http_code}" -o response.txt \
+                --connect-timeout 20 --max-time 60 \
+                "${base_url}/api/init/${JWT_SECRET}")
+              CURL_EXIT=$?
+              set -e
+              RESPONSE_BODY=$(cat response.txt 2>/dev/null || echo "")
+
+              if [ $CURL_EXIT -eq 0 ] && [ "$RESPONSE_BODY" = "success" ]; then
+                echo "✅ Database initialized successfully."
+                return 0
+              fi
+
+              if [ $CURL_EXIT -ne 0 ]; then
+                echo "⚠️ curl failed with exit code $CURL_EXIT"
+                if [ $CURL_EXIT -eq 35 ]; then
+                  echo "   SSL 连接失败：自定义域名证书可能尚未生效，或 DNS 未正确解析到 Cloudflare。"
+                fi
+              else
+                echo "⚠️ HTTP $HTTP_CODE, Response: $RESPONSE_BODY"
+              fi
+
+              sleep 10
+              attempt=$((attempt + 1))
+            done
+
+            return 1
+          }
+
+          if try_init "$PRIMARY_URL"; then
+            exit 0
+          fi
+
+          if [ -n "$FALLBACK_URL" ] && [ "$FALLBACK_URL" != "$PRIMARY_URL" ]; then
+            echo "Primary URL failed, retrying with workers.dev URL..."
+            if try_init "$FALLBACK_URL"; then
+              exit 0
+            fi
+          fi
+
+          echo "❌ Database initialization failed after retries."
+          echo "You can initialize manually by visiting: ${PRIMARY_URL}/api/init/<your-jwt-secret>"
+          exit 1
 
       - name: 🗑️ 删除运行记录 / Delete workflow runs
         uses: GitRML/delete-workflow-runs@main

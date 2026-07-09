@@ -55,3 +55,13 @@ You need a workers.dev subdomain in order to proceed. [code: 10067]
 **运行工作流**
 1. 然后在Action页面手动运行工作流，后续同步上游后会自动部署到 Cloudflare Workers。如未配置 `INIT_URL`，则需要手动访问 `https://你的项目域名/api/init/你的jwt_secret` 进行数据库初始化。
 2. 自动同步上游可使用bot或者手动点击Sync Upstream按钮。
+
+**数据库初始化失败（curl exit 35）**
+
+若部署成功但「初始化数据库」步骤失败，且日志显示 `exit code 35`，通常是 **SSL 连接失败**：
+
+- 若配置了 `CUSTOM_DOMAIN`，请确认该域名已在 Cloudflare 中完成 DNS 解析并启用 HTTPS
+- 证书生效可能需要数分钟，workflow 会自动重试；也可改用 workers.dev 地址手动初始化
+- 手动初始化地址：`https://<你的域名或workers.dev地址>/api/init/<JWT_SECRET>`
+
+---
