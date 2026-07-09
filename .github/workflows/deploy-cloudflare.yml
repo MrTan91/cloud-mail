@@ -24,6 +24,7 @@ jobs:
       D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID || vars.D1_DATABASE_ID }}
       KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID || vars.KV_NAMESPACE_ID }}
       R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME || vars.R2_BUCKET_NAME }}
+      R2_JURISDICTION: ${{ secrets.R2_JURISDICTION || vars.R2_JURISDICTION }}
       PROJECT_LINK: ${{ secrets.PROJECT_LINK || vars.PROJECT_LINK }}
       AI_MODEL: ${{ secrets.AI_MODEL || vars.AI_MODEL || '@cf/meta/llama-3.1-8b-instruct' }}
       CLOUDFLARE_EMAIL: ${{ secrets.CF_EMAIL || vars.CF_EMAIL || false }}
@@ -141,6 +142,9 @@ jobs:
           sed -i "s|\${ADMIN}|${ADMIN}|g" "$CONFIG_FILE"
           sed -i "s|\${JWT_SECRET}|${JWT_SECRET}|g" "$CONFIG_FILE"
           sed -i "s|\${R2_BUCKET_NAME}|${R2_BUCKET_NAME}|g" "$CONFIG_FILE"
+          if [ -n "$R2_BUCKET_NAME" ] && [ -n "$R2_JURISDICTION" ]; then
+            sed -i "/bucket_name = \"${R2_BUCKET_NAME}\"/a jurisdiction = \"${R2_JURISDICTION}\"" "$CONFIG_FILE"
+          fi
           sed -i "s|\${PROJECT_LINK}|${PROJECT_LINK}|g" "$CONFIG_FILE"
           sed -i "s|\${ANALYSIS_CACHE}|${ANALYSIS_CACHE}|g" "$CONFIG_FILE"
           sed -i "s|\${AI_MODEL}|${AI_MODEL}|g" "$CONFIG_FILE"
@@ -227,20 +231,66 @@ jobs:
           sed -i "s|\${D1_DATABASE_ID}|$D1_ID|g" "$CONFIG_FILE"
           echo "✅ Setup completed."
 
+      - name: 🪣 验证 R2 存储桶 / Verify R2 bucket
+        if: env.R2_BUCKET_NAME != ''
+        working-directory: ./mail-worker
+        run: |
+          echo "🔍 Verifying R2 bucket: $R2_BUCKET_NAME"
+          R2_LIST_CMD=(pnpm wrangler r2 bucket list)
+          if [ -n "$R2_JURISDICTION" ]; then
+            R2_LIST_CMD+=(--jurisdiction "$R2_JURISDICTION")
+          fi
+          set +e
+          R2_LIST=$("${R2_LIST_CMD[@]}" 2>&1)
+          STATUS=$?
+          set -e
+          if [ $STATUS -ne 0 ]; then
+            echo "$R2_LIST"
+            exit 1
+          fi
+          if ! echo "$R2_LIST" | grep -Fq "$R2_BUCKET_NAME"; then
+            echo "❌ R2 bucket '$R2_BUCKET_NAME' not found."
+            echo "Available buckets:"
+            echo "$R2_LIST"
+            if [ -z "$R2_JURISDICTION" ]; then
+              echo "::warning:: If your bucket is in EU region, set R2_JURISDICTION=eu in repository secrets/variables."
+            fi
+            exit 1
+          fi
+          echo "✅ R2 bucket verified."
+
+      - name: 🔍 验证前端构建产物 / Verify frontend assets
+        working-directory: ./mail-worker
+        run: |
+          if [ ! -f "./dist/index.html" ]; then
+            echo "❌ Frontend build output not found at ./mail-worker/dist/index.html"
+            echo "Please ensure mail-vue build completed and VITE_OUT_DIR points to ../mail-worker/dist"
+            ls -la ./dist 2>/dev/null || echo "(dist directory does not exist)"
+            exit 1
+          fi
+          echo "✅ Frontend assets ready: $(find ./dist -type f | wc -l) files"
+
+      - name: 📋 预览 Wrangler 配置 / Preview wrangler config
+        working-directory: ./mail-worker
+        run: |
+          echo "📋 Sanitized wrangler-action.toml:"
+          sed -E \
+            -e 's/(jwt_secret|linuxdo_client_secret) = .*/\1 = (***)' \
+            -e 's/(admin|domain) = .*/\1 = (***)' \
+            wrangler-action.toml
+
       - name: 🚀 开始部署 / Start deployment
         id: deploy
         working-directory: ./mail-worker
+        env:
+          WRANGLER_LOG: debug
         run: |
           echo "🚀 Starting deployment..."
-          pnpm wrangler deploy -c wrangler-action.toml 2>&1 \
-            | tee deploy.log \
-            | grep -v "https://.*\.workers\.dev" \
-            | sed -E 's/env\.domain .*/env.domain (***)/' \
-            || true
-          
-          DEPLOY_EXIT_CODE=${PIPESTATUS[0]}
+          set -o pipefail
+          pnpm wrangler deploy -c wrangler-action.toml 2>&1 | tee deploy.log
+          DEPLOY_EXIT_CODE=$?
           if [ $DEPLOY_EXIT_CODE -ne 0 ]; then
-            echo "❌ Deployment failed. Full log:"
+            echo "❌ Deployment failed (exit code: $DEPLOY_EXIT_CODE). Full log:"
             cat deploy.log
             exit 1
           fi
