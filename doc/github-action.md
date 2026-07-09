@@ -18,6 +18,25 @@
 | `ADMIN`                 |  ✅  | 您的管理员邮箱地址（例如 `admin@example.com`）      |
 | `JWT_SECRET`            |  ✅  | 用于生成和验证 JWT 的随机长字符串                     |
 | `INIT_URL`              |  ❌  | （可选）部署后用于初始化数据库的 Worker URL（格式参考下述手动初始化）           |
+| `ENABLE_CRON`           |  ❌  | （可选）是否部署 Cron 定时任务，默认 `true`。若账户未初始化 workers.dev 子域名，可临时设为 `false` |
+
+---
+
+**首次部署前：初始化 Cloudflare Workers**
+
+部署前请确保 Cloudflare 账户已启用 Workers：
+
+1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)
+2. 进入 **Workers & Pages**
+3. 首次打开该页面会自动创建 `*.workers.dev` 子域名
+
+若跳过此步骤，部署时可能报错：
+
+```
+You need a workers.dev subdomain in order to proceed. [code: 10067]
+```
+
+临时绕过方式：在仓库 Variables 中设置 `ENABLE_CRON=false`（会跳过定时任务，但建议仍应完成上述初始化）。
 
 ---
 
