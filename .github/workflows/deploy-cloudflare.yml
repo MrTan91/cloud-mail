@@ -274,11 +274,16 @@ jobs:
       - name: 📋 预览 Wrangler 配置 / Preview wrangler config
         working-directory: ./mail-worker
         run: |
+          if [ ! -f wrangler-action.toml ]; then
+            echo "❌ wrangler-action.toml not found"
+            ls -la
+            exit 1
+          fi
           echo "📋 Sanitized wrangler-action.toml:"
           sed -E \
-            -e 's/(jwt_secret|linuxdo_client_secret) = .*/\1 = (***)' \
-            -e 's/(admin|domain) = .*/\1 = (***)' \
-            wrangler-action.toml
+            -e 's/^(jwt_secret|linuxdo_client_secret) = .*/\1 = (redacted)/' \
+            -e 's/^(admin|domain) = .*/\1 = (redacted)/' \
+            wrangler-action.toml || cat wrangler-action.toml
 
       - name: 🚀 开始部署 / Start deployment
         id: deploy
